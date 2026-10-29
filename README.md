@@ -33,6 +33,20 @@ npm start
 
 Builds the client and serves it and the API from http://localhost:4000.
 
+## Deploy a live demo (Render, free)
+
+The repository includes a Render Blueprint ([render.yaml](render.yaml)).
+
+1. Push this repository to GitHub.
+2. Sign in at https://render.com (you can use "Sign in with GitHub").
+3. Choose **New → Blueprint**, select the repository, and click **Deploy Blueprint**.
+4. After the build (a few minutes), the app is live at `https://project-tracker-XXXX.onrender.com`.
+
+On the free plan the service sleeps after 15 minutes without traffic (the first request takes about a
+minute to wake it up), and the disk is not persistent: data resets to the demo data on every restart or
+redeploy. In the hosted demo the password-reset link is shown on the page, because no email service is
+configured (`SHOW_RESET_LINK=true`).
+
 ## Demo accounts
 
 All seeded accounts use the password `Password123`.

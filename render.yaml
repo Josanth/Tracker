@@ -1,0 +1,21 @@
+# Render Blueprint: one free web service serving the API and the built React app.
+# Deploy: Render dashboard → New → Blueprint → pick this repository.
+services:
+  - type: web
+    name: project-tracker
+    runtime: node
+    plan: free
+    buildCommand: npm install --prefix server && npm install --prefix client --include=dev && npm run build --prefix client
+    startCommand: npm start --prefix server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # The free tier has no persistent disk: data resets on restart/redeploy, and demo data is reloaded.
+      - key: SEED_DEMO
+        value: "true"
+      # No email service is configured, so show the password-reset link on the page for the demo.
+      - key: SHOW_RESET_LINK
+        value: "true"

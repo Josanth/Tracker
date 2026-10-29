@@ -42,3 +42,6 @@
 ## Environment
 - Requires Node.js 22.13+ for the built-in `node:sqlite` module.
 - SQLite is single-writer; suitable for a small team on one server, not for horizontal scaling.
+- **Hosted demo (Render free plan):** no persistent disk, so all data resets to the demo data whenever
+  the service restarts or is redeployed. It also sleeps when idle, so the first request after a break
+  is slow. A real deployment needs a persistent disk or a managed database.
