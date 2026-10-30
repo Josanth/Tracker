@@ -113,3 +113,25 @@ dispatching real `DragEvent`s. No code change, but documented as a test limitati
 - Board described with 3 columns but 4 statuses exist — implemented 4 columns.
 - BR-04 only defines forward moves — documented assumption A6 (one step back allowed).
 - Admin role vs BR-01 — documented assumption A5 (admins view, members work).
+
+## 10. Hosted data lost overnight (found by a user after deployment)
+
+**What AI generated:** a Render free-plan deployment that kept the SQLite file on the service's own disk
+and reloaded the demo data whenever the database was empty.
+
+**What was incorrect:** Render's free plan wipes the disk whenever the service restarts, and the service
+restarts after sleeping for 15 minutes without traffic. A member who registered and was added to a project
+in the evening could not log in the next morning: their account, membership and any tasks were gone, and
+the demo data had been loaded again. The AI had documented the limitation, but the design was unsuitable
+for a site real people sign up on, and the risk was not stated clearly enough when the link was shared.
+
+**Modification:** moved storage to a free hosted Turso (libSQL) database. The SQL is unchanged, but the
+client is asynchronous, so every route and the auth middleware were converted to `async`/`await`. Write
+transactions now go through one in-process lock, which keeps task numbering, idempotent creation and
+optimistic locking race-free. Deleting a task removes its comments explicitly instead of relying on
+`ON DELETE CASCADE` (remote connections don't keep per-connection PRAGMAs). Demo data is loaded only
+into a brand-new empty database. Added test TC-E-09 (a member can log in after a server restart) and
+re-verified it in the browser (TC-UI-10).
+
+**Why:** data that silently disappears is worse than a visible error; a project tracker must keep users,
+memberships and tasks across restarts.

@@ -167,7 +167,7 @@ test('TC-F-12 dashboards: my tasks, due this week, overdue, admin totals', async
   await s.createTask(owner, p, { title: 'Due today', assigneeId: dev.id, dueDate: daysFromToday(0) });
   const late = (await s.createTask(owner, p, { title: 'Late', assigneeId: dev.id, dueDate: daysFromToday(1) })).body.task;
   // Force a past due date directly (the API refuses to create one).
-  s.db.prepare('UPDATE tasks SET due_date = ? WHERE id = ?').run(daysFromToday(-3), late.id);
+  await s.db.run('UPDATE tasks SET due_date = ? WHERE id = ?', daysFromToday(-3), late.id);
 
   const dash = (await s.call('GET', '/dashboard', { token: dev.token })).body;
   assert.equal(dash.personal.assignedToMe.length, 2);

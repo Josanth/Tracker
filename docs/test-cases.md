@@ -1,7 +1,7 @@
 # Test Cases
 
 **Automated:** `npm test` runs every case marked *Auto* against the real Express app with a fresh
-in-memory SQLite database (`server/test/*.test.js`). Last run: **34 passed, 0 failed**.
+temporary SQLite database file (`server/test/*.test.js`). Last run: **35 passed, 0 failed**.
 
 **Manual (UI):** cases marked *UI* were executed in the browser against the seeded demo data
 (`npm run seed`, log in as `olivia@example.com` / `Password123` unless stated).
@@ -59,6 +59,8 @@ in-memory SQLite database (`server/test/*.test.js`). Last run: **34 passed, 0 fa
 | TC-E-06 | Direct URL to project | Outsider requests existing, nonexistent and non-numeric project ids | 403, 404, 404 | Auto | Pass |
 | TC-E-07 | Task ID uniqueness under load | 10 parallel creates in project `PAR` | Keys PAR-1…PAR-10, no duplicates | Auto | Pass |
 | TC-E-08 | Number not reused after delete | Create DEL-1, delete it, create another | New task is DEL-2 | Auto | Pass |
+| TC-E-09 | Data survives a server restart | Register an owner and a new user, add the user to a project, create a task; stop the server; start a new one on the same database; log in as the new user | Login 200; project and task still visible | Auto | Pass |
+| TC-UI-10 | New member can log in after restart (UI) | Register Priya, owner adds her to LIB, restart the app, log in as Priya | Login succeeds; Library System listed | UI | Pass |
 | TC-UI-04 | Illegal drag on the board | Drag LIB-4 (To Do) onto Done | Card stays in To Do; message "Tasks must move one status at a time…" | UI | Pass |
 | TC-UI-05 | Concurrent edit warning (UI) | Open LIB-2; change its title from another session; change priority to Low and save | Warning "LIB-2 was changed by someone else…" with latest values, page scrolls to it. "Keep mine" saves Low priority **and keeps the other user's title** | UI | Pass |
 | TC-UI-06 | Refresh during task creation (UI) | Open New task, type a title, refresh | Dialog reopens with "Restored your unsaved draft…" | UI | Pass |

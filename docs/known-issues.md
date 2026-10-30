@@ -40,8 +40,12 @@
 - Delete and remove-member confirmations use the browser's native `confirm()` dialog.
 
 ## Environment
-- Requires Node.js 22.13+ for the built-in `node:sqlite` module.
+- Requires Node.js 20+.
 - SQLite is single-writer; suitable for a small team on one server, not for horizontal scaling.
-- **Hosted demo (Render free plan):** no persistent disk, so all data resets to the demo data whenever
-  the service restarts or is redeployed. It also sleeps when idle, so the first request after a break
-  is slow. A real deployment needs a persistent disk or a managed database.
+- **Hosted demo (Render free plan):** it sleeps when idle, so the first request after a break takes
+  about a minute. Data is safe because it lives in Turso, but if `TURSO_DATABASE_URL` is missing the app
+  silently falls back to a local file, which Render wipes on restart (check the startup log line
+  "Database: hosted Turso database").
+- Write transactions are serialised inside the one server process. Running several server instances
+  against the same database would need database-level locking instead.
+- Turso's free tier has storage and request limits that are far above what a demo needs.

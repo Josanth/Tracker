@@ -76,11 +76,12 @@ treated as a single section.
 | Area | Approach |
 |---|---|
 | Security | scrypt password hashing; random session tokens stored hashed; same error for unknown email / wrong password; server-side authorization on every endpoint; parameterised SQL |
+| Durability | Production data lives in a hosted Turso database, so restarts and redeploys never lose data |
 | Data integrity | Foreign keys, unique constraints (email, project key, task number per project, request id per project), CHECK constraints for status/priority, transactions |
 | Concurrency | Optimistic locking with `version` columns on tasks and projects; 409 responses carry the latest record |
 | Usability | Inline field errors (client + server), clear conflict/permission messages, responsive layout, light/dark theme |
-| Testability | 34 automated API tests; deterministic in-memory DB per suite |
-| Portability | Only dependency outside Node is Express/React/Vite; SQLite is built into Node 22.13+ |
+| Testability | 35 automated API tests; a fresh temporary database per suite |
+| Portability | Runs anywhere Node 20+ runs; local SQLite file in development, hosted Turso (libSQL) in production via the same SQL |
 
 ## 5. Data model
 

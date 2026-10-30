@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { authenticate, publicUser } from '../auth.js';
 import { loadProject, loadTask, isProjectMember, logActivity } from '../access.js';
-import { tx } from '../db.js';
 import { checkTransition, allowedTransitions } from '../workflow.js';
 import {
   Validator,
@@ -51,9 +50,9 @@ function requireMember(perms) {
   if (!perms.isMember) throw forbidden('Only project members can work on this project\'s tasks');
 }
 
-function validateAssignee(db, v, projectId, assigneeId) {
+async function validateAssignee(db, v, projectId, assigneeId) {
   if (assigneeId === null) return;
-  if (!Number.isInteger(assigneeId) || !isProjectMember(db, projectId, assigneeId)) {
+  if (!Number.isInteger(assigneeId) || !(await isProjectMember(db, projectId, assigneeId))) {
     v.error('assigneeId', 'A task can only be assigned to a member of this project'); // BR-03
   }
 }
@@ -61,10 +60,10 @@ function validateAssignee(db, v, projectId, assigneeId) {
 export default function taskRoutes(db) {
   const r = Router();
   const auth = authenticate(db);
-  const getTask = (id) => db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id);
+  const getTask = (id) => db.get(`${TASK_SELECT} WHERE t.id = ?`, id);
 
-  r.get('/projects/:id/tasks', auth, (req, res) => {
-    const { project } = loadProject(db, req.params.id, req.user);
+  r.get('/projects/:id/tasks', auth, async (req, res) => {
+    const { project } = await loadProject(db, req.params.id, req.user);
     const where = ['t.project_id = ?'];
     const params = [project.id];
     const q = trimOrEmpty(req.query.q);
@@ -93,12 +92,12 @@ export default function taskRoutes(db) {
       where.push("t.due_date < ? AND t.status <> 'Done'");
       params.push(today());
     }
-    const rows = db.prepare(`${TASK_SELECT} WHERE ${where.join(' AND ')} ORDER BY t.number DESC`).all(...params);
+    const rows = await db.all(`${TASK_SELECT} WHERE ${where.join(' AND ')} ORDER BY t.number DESC`, ...params);
     res.json({ tasks: rows.map((row) => serializeTask(row)) });
   });
 
-  r.post('/projects/:id/tasks', auth, (req, res) => {
-    const { project, perms } = loadProject(db, req.params.id, req.user);
+  r.post('/projects/:id/tasks', auth, async (req, res) => {
+    const { project, perms } = await loadProject(db, req.params.id, req.user);
     requireMember(perms);
     const title = trimOrEmpty(req.body.title);
     const description = trimOrEmpty(req.body.description);
@@ -114,30 +113,33 @@ export default function taskRoutes(db) {
     if (v.date('dueDate', dueDate, 'Due date') && dueDate && dueDate < today()) {
       v.error('dueDate', 'Due date cannot be in the past');
     }
-    validateAssignee(db, v, project.id, assigneeId);
+    await validateAssignee(db, v, project.id, assigneeId);
     v.throwIfAny();
 
-    const result = tx(db, () => {
+    const result = await db.tx(async (t) => {
       // Idempotency: a retried submit (refresh, double click, network retry) carries the same
       // clientRequestId and gets the original task back instead of a duplicate.
       if (clientRequestId) {
-        const existing = db
-          .prepare('SELECT id FROM tasks WHERE project_id = ? AND client_request_id = ?')
-          .get(project.id, String(clientRequestId));
+        const existing = await t.get('SELECT id FROM tasks WHERE project_id = ? AND client_request_id = ?', project.id, String(clientRequestId));
         if (existing) return { id: existing.id, replay: true };
       }
       // Allocate the next number under the write lock so IDs are unique within the project.
-      const { next_task_number: number } = db
-        .prepare('SELECT next_task_number FROM projects WHERE id = ?')
-        .get(project.id);
-      db.prepare('UPDATE projects SET next_task_number = next_task_number + 1 WHERE id = ?').run(project.id);
-      const info = db
-        .prepare(
-          `INSERT INTO tasks (project_id, number, title, description, priority, assignee_id, reporter_id, due_date, client_request_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(project.id, number, title, description, priority, assigneeId, req.user.id, dueDate, clientRequestId && String(clientRequestId));
-      logActivity(db, {
+      const { next_task_number: number } = await t.get('SELECT next_task_number FROM projects WHERE id = ?', project.id);
+      await t.run('UPDATE projects SET next_task_number = next_task_number + 1 WHERE id = ?', project.id);
+      const info = await t.run(
+        `INSERT INTO tasks (project_id, number, title, description, priority, assignee_id, reporter_id, due_date, client_request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        project.id,
+        number,
+        title,
+        description,
+        priority,
+        assigneeId,
+        req.user.id,
+        dueDate,
+        clientRequestId === null ? null : String(clientRequestId)
+      );
+      await logActivity(t, {
         projectId: project.id,
         taskId: info.lastInsertRowid,
         userId: req.user.id,
@@ -148,28 +150,28 @@ export default function taskRoutes(db) {
     });
     res.status(result.replay ? 200 : 201);
     if (result.replay) res.set('Idempotent-Replay', 'true');
-    res.json({ task: serializeTask(getTask(result.id)) });
+    res.json({ task: serializeTask(await getTask(result.id)) });
   });
 
-  r.get('/tasks/:taskId', auth, (req, res) => {
-    const { task, perms } = loadTask(db, req.params.taskId, req.user);
-    const comments = db
-      .prepare(
+  r.get('/tasks/:taskId', auth, async (req, res) => {
+    const { task, perms } = await loadTask(db, req.params.taskId, req.user);
+    const comments = (
+      await db.all(
         `SELECT c.*, u.name, u.email FROM comments c JOIN users u ON u.id = c.author_id
-         WHERE c.task_id = ? ORDER BY c.id`
+         WHERE c.task_id = ? ORDER BY c.id`,
+        task.id
       )
-      .all(task.id)
-      .map((c) => ({ id: c.id, body: c.body, author: { id: c.author_id, name: c.name, email: c.email }, createdAt: c.created_at }));
-    const activity = db
-      .prepare(
+    ).map((c) => ({ id: c.id, body: c.body, author: { id: c.author_id, name: c.name, email: c.email }, createdAt: c.created_at }));
+    const activity = (
+      await db.all(
         `SELECT a.*, u.name AS user_name FROM activity a JOIN users u ON u.id = a.user_id
-         WHERE a.task_id = ? ORDER BY a.id DESC`
+         WHERE a.task_id = ? ORDER BY a.id DESC`,
+        task.id
       )
-      .all(task.id)
-      .map((a) => ({ id: a.id, action: a.action, detail: JSON.parse(a.detail), user: { id: a.user_id, name: a.user_name }, createdAt: a.created_at }));
+    ).map((a) => ({ id: a.id, action: a.action, detail: JSON.parse(a.detail), user: { id: a.user_id, name: a.user_name }, createdAt: a.created_at }));
     const isReporter = task.reporter_id === req.user.id;
     res.json({
-      task: serializeTask(getTask(task.id)),
+      task: serializeTask(await getTask(task.id)),
       comments,
       activity,
       permissions: {
@@ -180,8 +182,8 @@ export default function taskRoutes(db) {
     });
   });
 
-  r.patch('/tasks/:taskId', auth, (req, res) => {
-    const { task, perms } = loadTask(db, req.params.taskId, req.user);
+  r.patch('/tasks/:taskId', auth, async (req, res) => {
+    const { task, perms } = await loadTask(db, req.params.taskId, req.user);
     requireMember(perms);
     const body = req.body;
     if (body.version === undefined) throw badRequest('version is required for updates', { version: 'Required' });
@@ -206,7 +208,7 @@ export default function taskRoutes(db) {
     }
     if (body.assigneeId !== undefined) {
       changes.assignee_id = emptyToNull(body.assigneeId) === null ? null : Number(body.assigneeId);
-      validateAssignee(db, v, task.project_id, changes.assignee_id);
+      await validateAssignee(db, v, task.project_id, changes.assignee_id);
     }
     if (body.status !== undefined) {
       if (!STATUSES.includes(body.status)) v.error('status', `Unknown status "${body.status}"`);
@@ -225,44 +227,48 @@ export default function taskRoutes(db) {
     v.throwIfAny();
 
     const columns = Object.keys(changes);
-    const updated = tx(db, () => {
-      if (columns.length) {
-        const sets = columns.map((c) => `${c} = ?`).join(', ');
-        // Optimistic locking: the update only applies if nobody else changed the task since the client loaded it.
-        const info = db
-          .prepare(`UPDATE tasks SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE id = ? AND version = ?`)
-          .run(...columns.map((c) => changes[c]), task.id, Number(body.version));
-        if (info.changes === 0) {
-          throw conflict('VERSION_CONFLICT', 'This task was changed by someone else. Review the latest version and try again.', {
-            current: serializeTask(getTask(task.id)),
-          });
-        }
-        const diff = {};
-        for (const c of columns) if (task[c] !== changes[c]) diff[c] = { from: task[c], to: changes[c] };
-        if (diff.assignee_id) {
-          const name = (id) => (id ? db.prepare('SELECT name FROM users WHERE id = ?').get(id)?.name : null);
-          diff.assignee_id = { from: name(diff.assignee_id.from), to: name(diff.assignee_id.to) };
-        }
-        if (Object.keys(diff).length) {
-          logActivity(db, { projectId: task.project_id, taskId: task.id, userId: req.user.id, action: 'task.updated', detail: diff });
-        }
-      } else if (Number(body.version) !== task.version) {
-        throw conflict('VERSION_CONFLICT', 'This task was changed by someone else.', { current: serializeTask(getTask(task.id)) });
+    const stale = await db.tx(async (t) => {
+      if (!columns.length) {
+        const { version } = await t.get('SELECT version FROM tasks WHERE id = ?', task.id);
+        return Number(body.version) !== version;
       }
-      return getTask(task.id);
+      const sets = columns.map((c) => `${c} = ?`).join(', ');
+      // Optimistic locking: the update only applies if nobody else changed the task since the client loaded it.
+      const info = await t.run(
+        `UPDATE tasks SET ${sets}, version = version + 1, updated_at = datetime('now') WHERE id = ? AND version = ?`,
+        ...columns.map((c) => changes[c]),
+        task.id,
+        Number(body.version)
+      );
+      if (info.changes === 0) return true;
+      const diff = {};
+      for (const c of columns) if (task[c] !== changes[c]) diff[c] = { from: task[c], to: changes[c] };
+      if (diff.assignee_id) {
+        const name = async (id) => (id ? (await t.get('SELECT name FROM users WHERE id = ?', id))?.name : null);
+        diff.assignee_id = { from: await name(diff.assignee_id.from), to: await name(diff.assignee_id.to) };
+      }
+      if (Object.keys(diff).length) {
+        await logActivity(t, { projectId: task.project_id, taskId: task.id, userId: req.user.id, action: 'task.updated', detail: diff });
+      }
+      return false;
     });
-    res.json({ task: serializeTask(updated) });
+    const current = serializeTask(await getTask(task.id));
+    if (stale) {
+      throw conflict('VERSION_CONFLICT', 'This task was changed by someone else. Review the latest version and try again.', { current });
+    }
+    res.json({ task: current });
   });
 
-  r.delete('/tasks/:taskId', auth, (req, res) => {
-    const { task, perms } = loadTask(db, req.params.taskId, req.user);
+  r.delete('/tasks/:taskId', auth, async (req, res) => {
+    const { task, perms } = await loadTask(db, req.params.taskId, req.user);
     requireMember(perms);
     if (task.reporter_id !== req.user.id && !perms.isOwner) {
       throw forbidden('Only the reporter or the project owner can delete a task'); // BR-07
     }
-    tx(db, () => {
-      db.prepare('DELETE FROM tasks WHERE id = ?').run(task.id);
-      logActivity(db, {
+    await db.tx(async (t) => {
+      await t.run('DELETE FROM comments WHERE task_id = ?', task.id);
+      await t.run('DELETE FROM tasks WHERE id = ?', task.id);
+      await logActivity(t, {
         projectId: task.project_id,
         userId: req.user.id,
         action: 'task.deleted',
@@ -272,18 +278,18 @@ export default function taskRoutes(db) {
     res.status(204).end();
   });
 
-  r.post('/tasks/:taskId/comments', auth, (req, res) => {
-    const { task, perms } = loadTask(db, req.params.taskId, req.user);
+  r.post('/tasks/:taskId/comments', auth, async (req, res) => {
+    const { task, perms } = await loadTask(db, req.params.taskId, req.user);
     requireMember(perms);
     const body = trimOrEmpty(req.body.body);
     const v = new Validator();
     v.required('body', body, 'Comment');
     if (body.length > 5000) v.error('body', 'Comment must be 5000 characters or fewer');
     v.throwIfAny();
-    const comment = tx(db, () => {
-      const info = db.prepare('INSERT INTO comments (task_id, author_id, body) VALUES (?, ?, ?)').run(task.id, req.user.id, body);
-      logActivity(db, { projectId: task.project_id, taskId: task.id, userId: req.user.id, action: 'comment.added', detail: {} });
-      return db.prepare('SELECT * FROM comments WHERE id = ?').get(info.lastInsertRowid);
+    const comment = await db.tx(async (t) => {
+      const info = await t.run('INSERT INTO comments (task_id, author_id, body) VALUES (?, ?, ?)', task.id, req.user.id, body);
+      await logActivity(t, { projectId: task.project_id, taskId: task.id, userId: req.user.id, action: 'comment.added', detail: {} });
+      return t.get('SELECT * FROM comments WHERE id = ?', info.lastInsertRowid);
     });
     res.status(201).json({
       comment: { id: comment.id, body: comment.body, author: publicUser(req.user), createdAt: comment.created_at },

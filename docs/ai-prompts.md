@@ -37,3 +37,4 @@ decomposed by the AI into the following units of work; they are listed so each c
 | P10 | Make task creation safe against refresh/double-submit. | `CreateTaskModal.jsx` + server idempotency |
 | P11 | Keep multiple tabs consistent. | `sync.js`, `auth.jsx` |
 | P12 | Write README, requirement analysis, business rules, assumptions, test cases, AI review and known issues documents. | `README.md`, `docs/` |
+| P13 | Fix: a member added yesterday cannot log in today on the hosted site. Keep data across restarts on a free host. | `db.js` (async libSQL client), all routes, `render.yaml` |

@@ -1,9 +1,15 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { openDb } from '../src/db.js';
 import { createApp } from '../src/app.js';
 import { today } from '../src/util.js';
 
-export async function startServer() {
-  const db = openDb(':memory:');
+// Pass `file` (and `keepFile: true` on the first server) to restart a server on the same database.
+export async function startServer({ file = path.join(os.tmpdir(), `tracker-test-${crypto.randomUUID()}.db`), keepFile = false } = {}) {
+  // A local database file per suite (the libSQL client opens extra connections, so :memory: won't do).
+  const db = await openDb(`file:${file.split(path.sep).join('/')}`);
   const app = createApp(db, { exposeResetToken: true });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
@@ -56,7 +62,18 @@ export async function startServer() {
     createProject,
     addMember,
     createTask,
-    close: () => new Promise((r) => server.close(r)),
+    close: async () => {
+      await new Promise((r) => server.close(r));
+      db.close();
+      if (keepFile) return;
+      for (const f of [file, `${file}-wal`, `${file}-shm`]) {
+        try {
+          fs.rmSync(f, { force: true });
+        } catch {
+          // Windows can keep the file locked briefly after close; a stray temp file is harmless.
+        }
+      }
+    },
   };
 }
 

@@ -43,7 +43,7 @@ feedback, but a direct API call cannot bypass them. Test IDs refer to [test-case
 | Due date not in past (create) | `dueDate >= today` (server's local date); invalid dates like 2026-02-30 rejected | 400 | TC-N-05 |
 | Due date on edit | An existing past due date may be kept, but a *changed* due date cannot be in the past | 400 | — |
 | Assignee is member | BR-03 | 400 | TC-N-06 |
-| Unique task IDs | `UNIQUE(project_id, number)` + counter incremented inside `BEGIN IMMEDIATE` transaction; numbers are never reused after deletion | — | TC-E-07, TC-E-08 |
+| Unique task IDs | `UNIQUE(project_id, number)` + counter incremented inside a write transaction (write transactions run one at a time); numbers are never reused after deletion | — | TC-E-07, TC-E-08 |
 | Priority / status values | Must be one of the defined values (also a DB CHECK constraint) | 400 | TC-E-03 |
 | Comment not empty | Non-blank after trimming, ≤ 5000 chars | 400 | TC-N-05 |
 | Version required on update | `PATCH /tasks/:id` must include the `version` the client last saw | 400 / 409 | TC-E-01 |

@@ -11,9 +11,10 @@
     "test": "node --test test/"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20"
   },
   "dependencies": {
+    "@libsql/client": "^0.15.15",
     "express": "^5.3.0"
   }
 }

@@ -1,4 +1,6 @@
 import { test, before, after } from 'node:test';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { startServer } from './helpers.js';
 
@@ -141,4 +143,28 @@ test('TC-E-08 numbers are not reused after a task is deleted', async () => {
   await s.call('DELETE', `/tasks/${t1.id}`, { token: owner.token });
   const t2 = (await s.createTask(owner, p)).body.task;
   assert.equal(t2.key, 'DEL-2');
+});
+
+test('TC-E-09 accounts, memberships and tasks survive a server restart', async () => {
+  const file = path.join(os.tmpdir(), `tracker-restart-${Date.now()}.db`);
+  const first = await startServer({ file, keepFile: true });
+  const owner = await first.register('Owner');
+  const newbie = await first.register('Newbie');
+  const p = await first.createProject(owner, { key: 'KEEP' });
+  await first.addMember(owner, p, newbie);
+  await first.createTask(owner, p, { title: 'Still here', assigneeId: newbie.id });
+  await first.close();
+
+  const second = await startServer({ file });
+  try {
+    const login = await second.call('POST', '/auth/login', { body: { email: newbie.email, password: 'Password123' } });
+    assert.equal(login.status, 200, 'a member added before the restart can still log in');
+    const token = login.body.token;
+    const projects = (await second.call('GET', '/projects', { token })).body.projects;
+    assert.deepEqual(projects.map((x) => x.key), ['KEEP']);
+    const tasks = (await second.call('GET', `/projects/${p.id}/tasks`, { token })).body.tasks;
+    assert.deepEqual(tasks.map((t) => t.title), ['Still here']);
+  } finally {
+    await second.close();
+  }
 });

@@ -1,10 +1,10 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Foreign keys are declared for documentation and local integrity, but the code never relies on
+// ON DELETE CASCADE: remote Turso connections don't keep per-connection PRAGMAs.
 const SCHEMA = `
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL,
@@ -16,13 +16,13 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
   expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS password_resets (
   token_hash TEXT PRIMARY KEY,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
   expires_at TEXT NOT NULL,
   used_at    TEXT
 );
@@ -42,15 +42,15 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE TABLE IF NOT EXISTS project_members (
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  user_id    INTEGER NOT NULL REFERENCES users(id),
   added_at   TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (project_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id        INTEGER NOT NULL REFERENCES projects(id),
   number            INTEGER NOT NULL,
   title             TEXT NOT NULL,
   description       TEXT NOT NULL DEFAULT '',
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS comments (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id),
   author_id  INTEGER NOT NULL REFERENCES users(id),
   body       TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS comments (
 
 CREATE TABLE IF NOT EXISTS activity (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
   task_id    INTEGER,
   user_id    INTEGER NOT NULL REFERENCES users(id),
   action     TEXT NOT NULL,
@@ -90,25 +90,71 @@ CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_activity_project ON activity(project_id, id);
 `;
 
-export function openDb(file = process.env.DB_FILE || path.resolve('data', 'tracker.db')) {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA busy_timeout = 5000;');
-  db.exec(SCHEMA);
-  return db;
+const normalize = (rs) => ({ changes: rs.rowsAffected, lastInsertRowid: rs.lastInsertRowid === undefined ? undefined : Number(rs.lastInsertRowid) });
+
+// Same query helpers on the client and inside a transaction.
+function queries(exec) {
+  return {
+    get: async (sql, ...args) => (await exec(sql, args)).rows[0],
+    all: async (sql, ...args) => (await exec(sql, args)).rows,
+    run: async (sql, ...args) => normalize(await exec(sql, args)),
+  };
 }
 
-// Runs fn inside a write transaction; nested calls reuse the outer one.
-export function tx(db, fn) {
-  if (db.isTransaction) return fn();
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+/**
+ * Opens the database. With TURSO_DATABASE_URL set it uses a hosted Turso (libSQL) database, so data
+ * survives restarts on hosts without a persistent disk; otherwise a local SQLite file.
+ *
+ * All writes go through one in-process lock: write transactions run one at a time, which keeps the
+ * task-number counter, idempotency checks and optimistic-lock updates race-free. (The app runs as a
+ * single server process.)
+ */
+export async function openDb(
+  url = process.env.TURSO_DATABASE_URL,
+  authToken = process.env.TURSO_AUTH_TOKEN,
+  file = process.env.DB_FILE || path.resolve('data', 'tracker.db')
+) {
+  if (!url) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    url = `file:${file.replaceAll('\\', '/')}`;
   }
+  const client = createClient({ url, authToken });
+  if (url.startsWith('file:')) {
+    await client.execute('PRAGMA journal_mode = WAL');
+    await client.execute('PRAGMA busy_timeout = 5000');
+  }
+  await client.executeMultiple(SCHEMA);
+
+  let lock = Promise.resolve();
+  const withLock = (fn) => {
+    const result = lock.then(fn);
+    lock = result.catch(() => {});
+    return result;
+  };
+  const exec = (sql, args) => client.execute({ sql, args });
+  const base = queries(exec);
+
+  return {
+    url,
+    get: base.get,
+    all: base.all,
+    // A single write outside a transaction still waits for any open transaction.
+    run: (sql, ...args) => withLock(() => base.run(sql, ...args)),
+    // Runs fn(t) inside a write transaction; t has get/all/run. Commits if fn resolves, rolls back if it throws.
+    tx: (fn) =>
+      withLock(async () => {
+        const t = await client.transaction('write');
+        try {
+          const result = await fn(queries((sql, args) => t.execute({ sql, args })));
+          await t.commit();
+          return result;
+        } catch (err) {
+          await t.rollback().catch(() => {});
+          throw err;
+        } finally {
+          t.close();
+        }
+      }),
+    close: () => client.close(),
+  };
 }

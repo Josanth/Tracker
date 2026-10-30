@@ -6,11 +6,13 @@ import { seedDemo } from './demo-data.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT) || 4000;
-const db = openDb(process.env.DB_FILE || path.join(here, '..', 'data', 'tracker.db'));
+// TURSO_DATABASE_URL (+ TURSO_AUTH_TOKEN) selects a hosted database; otherwise a local SQLite file.
+const db = await openDb(undefined, undefined, process.env.DB_FILE || path.join(here, '..', 'data', 'tracker.db'));
+console.log(`Database: ${db.url.startsWith('file:') ? db.url : 'hosted Turso database'}`);
 
-// Hosted demo: free hosting tiers start with an empty disk, so load the demo data on first start.
-if (process.env.SEED_DEMO === 'true' && db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0) {
-  seedDemo(db);
+// Load the demo data only into a brand-new, empty database; existing data is never touched.
+if (process.env.SEED_DEMO === 'true' && (await db.get('SELECT COUNT(*) AS n FROM users')).n === 0) {
+  await seedDemo(db);
   console.log('Empty database: loaded demo data');
 }
 

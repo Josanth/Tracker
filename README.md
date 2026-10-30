@@ -4,11 +4,11 @@ A simplified Jira-style web app: users register, create projects, add members, c
 move them across a board (To Do → In Progress → In Review → Done), comment, and see personal and
 owner/admin dashboards.
 
-**Stack:** React 18 + Vite (client) · Node.js + Express 5 (API) · SQLite via Node's built-in `node:sqlite` (no native build step).
+**Stack:** React 18 + Vite (client) · Node.js + Express 5 (API) · SQLite: a local file in development, a free hosted [Turso](https://turso.tech) (libSQL) database in production.
 
 ## Setup
 
-Requirements: **Node.js 22.13 or newer** (tested on Node 26). Nothing else; the database is a local file.
+Requirements: **Node.js 20 or newer** (tested on Node 26). Nothing else; locally the database is a file.
 
 ```bash
 npm run setup
@@ -37,14 +37,20 @@ Builds the client and serves it and the API from http://localhost:4000.
 
 The repository includes a Render Blueprint ([render.yaml](render.yaml)).
 
-1. Push this repository to GitHub.
-2. Sign in at https://render.com (you can use "Sign in with GitHub").
-3. Choose **New → Blueprint**, select the repository, and click **Deploy Blueprint**.
-4. After the build (a few minutes), the app is live at `https://project-tracker-XXXX.onrender.com`.
+Render's free plan wipes its disk whenever the service restarts (including after sleeping), so the
+data is kept in a free hosted **Turso** database instead.
 
-On the free plan the service sleeps after 15 minutes without traffic (the first request takes about a
-minute to wake it up), and the disk is not persistent: data resets to the demo data on every restart or
-redeploy. In the hosted demo the password-reset link is shown on the page, because no email service is
+1. **Create the database (free):** sign in at https://app.turso.tech (GitHub sign-in works), create a
+   database, then copy its **URL** (`libsql://…turso.io`) and create an **auth token** for it.
+2. Push this repository to GitHub.
+3. Sign in at https://render.com and choose **New → Blueprint**, select the repository.
+4. When Render asks for `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, paste the two values from step 1
+   (for an existing service: **Environment** tab → add both → **Save, rebuild and deploy**).
+5. After the build the app is live at `https://project-tracker-XXXX.onrender.com`. On first start with an
+   empty database it loads the demo accounts; after that, data is never reset.
+
+The free service sleeps after 15 minutes without traffic, so the first request after a break takes about
+a minute. Data is not affected. In the hosted demo the password-reset link is shown on the page, because no email service is
 configured (`SHOW_RESET_LINK=true`).
 
 ## Demo accounts
@@ -59,7 +65,7 @@ All seeded accounts use the password `Password123`.
 | nina@example.com | Member of LIB |
 | omar@example.com | Not a member of any project (use to test access denial) |
 
-Re-run `npm run seed` to reset the data (stop the app first — on Windows the open database file can't be replaced while the server is running). On an empty database (no seed) the **first account
+Re-run `npm run seed` to reset the local data (stop the app first — on Windows the open database file can't be replaced while the server is running). On an empty database (no seed) the **first account
 registered becomes the administrator**.
 
 Password reset: there is no mail server. In development the reset link is shown on the "Forgot password"
@@ -71,7 +77,7 @@ page and printed in the API console.
 npm test
 ```
 
-Runs 34 automated API tests (functional, negative, edge cases) against an in-memory database using
+Runs 35 automated API tests (functional, negative, edge cases) against a temporary database file using
 Node's built-in test runner. The test IDs match [docs/test-cases.md](docs/test-cases.md).
 
 ## Project structure

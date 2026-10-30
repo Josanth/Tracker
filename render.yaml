@@ -13,7 +13,14 @@ services:
         value: "24"
       - key: NODE_ENV
         value: production
-      # The free tier has no persistent disk: data resets on restart/redeploy, and demo data is reloaded.
+      # Render's free disk is wiped on every restart, so data lives in a free hosted Turso database.
+      # Enter both values in the Render dashboard (they are secrets, so they are not stored here).
+      # Without them the app falls back to a local file and loses data on restart.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      # Load the demo accounts only when the database is brand new and empty.
       - key: SEED_DEMO
         value: "true"
       # No email service is configured, so show the password-reset link on the page for the demo.
